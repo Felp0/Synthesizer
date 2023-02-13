@@ -6,6 +6,100 @@ atomic<double> m_Frequency = 0.0; // Dominant output frequency
 double octaveFrequency = 110.0; // Frequency of octave 
 double twThRootOf2 = pow(2.0, 1.0 / 12.0); //12 notes per Octave 
 
+struct EnvelopeADSR //stuct for Attack/Decay/Sustain and Release 
+{
+	double m_AttackTime;
+	double m_DecayTime;
+	double m_ReleaseTime;
+
+	double m_Sustain;
+	double m_StartAplitude;
+
+	double m_PressedTime;
+	double m_ReleasedTime;
+
+	bool isPressed;
+
+	EnvelopeADSR()
+	{
+		m_AttackTime = 0.100; // 100 milliseconds
+		m_DecayTime = 0.01;
+		m_StartAplitude = 1.0;
+		m_Sustain = 0.8;
+		m_ReleaseTime = 0.200; // 200 milliseconds
+		m_PressedTime = 0.0;
+		m_ReleasedTime = 0.0;
+
+		isPressed = false;
+	}
+
+	double GetAmplitude(double deltaT)
+	{
+		double amplitude = 0.0;
+		double envelopeLifeT = deltaT - m_PressedTime;
+
+		if (isPressed)
+		{
+			//Ads
+
+			//Attack phase
+			if (envelopeLifeT <= m_AttackTime)
+			{
+				amplitude = (envelopeLifeT / m_AttackTime) * m_StartAplitude; //Normalizing attack time/
+				//Creating a value between 0 and 1, if the lifetime is less than attack time, going to no amplitude to 100% amplitude
+				//
+			}
+
+			//Decay phase
+			if (envelopeLifeT > m_AttackTime && envelopeLifeT <= (m_AttackTime + m_DecayTime))
+			{
+				amplitude = ((envelopeLifeT - m_AttackTime) / m_DecayTime) *
+					(m_Sustain - m_StartAplitude) + m_StartAplitude;
+				//Creating a value between 0 and 1 on how far we are in decay time
+			}
+
+			//Sustain phase
+			if (envelopeLifeT > (m_AttackTime + m_DecayTime))
+			{
+				amplitude = m_Sustain;
+			}
+
+		}
+		else
+		{
+			//Release phase
+			amplitude = ((deltaT - m_ReleasedTime) / m_ReleasedTime) * (0.0 - m_Sustain) + m_Sustain;
+			//Creating a value between 0 an 1 on how far wer are in release phase
+		}
+
+		//Stopping low frequency sound that cant be heard 
+		if (amplitude <= 0.0001)
+		{
+			amplitude = 0;
+		}
+
+
+
+		return amplitude;
+	}
+
+
+	void NotePressed(double time)
+	{
+		m_PressedTime = time;
+		isPressed = true;
+	}
+
+	void NoteReleased(double time)
+	{
+		m_ReleasedTime = time;
+		isPressed = false;
+	}
+
+};
+
+EnvelopeADSR* m_Envelope;
+
 //Converting frequency to angular velocity
 double ConvertF(double hertz)
 {
@@ -51,75 +145,6 @@ double oscillator(double hertz, double deltaT, int type)
 	}
 }
 
-struct EnvelopeADSR //stuct for Attack/Decay/Sustain and Release 
-{
-	double m_AttackTime;
-	double m_DecayTime;
-	double m_ReleaseTime;
-
-	double m_Sustain;
-	double m_StartAplitude;
-
-	double m_PressedTime;
-	double m_ReleasedTime;
-
-	bool isPressed;
-
-	EnvelopeADSR()
-	{
-		m_AttackTime = 0.01; //milliseconds
-		m_DecayTime = 0.01;
-		m_StartAplitude = 1.0;
-		m_Sustain = 0.8;
-		m_ReleaseTime = 0.02;
-		m_PressedTime = 0.0;
-		m_ReleasedTime = 0.0;
-
-		isPressed = false;
-	}
-
-	double GetAmplitude(double deltaT)
-	{
-		double amplitude = 0.0;
-		double envelopeLifeT = deltaT - m_PressedTime;
-
-		if (isPressed)
-		{
-			//Ads
-
-			//Attack phase
-			if (envelopeLifeT <= m_AttackTime)
-			{
-				amplitude = (envelopeLifeT / m_AttackTime) * m_StartAplitude; //Normalizing amplitude
-
-			}
-
-
-		}
-		else
-		{
-			//R
-
-		}
-
-
-		return amplitude;
-	}
-
-
-	void NotePressed(double time)
-	{
-		m_PressedTime = time;
-		isPressed = true;
-	}
-
-	void NoteReleased(double time)
-	{
-		m_ReleasedTime = time;
-		isPressed = false;
-	}
-
-};
 
 double Noise(double deltaT)
 {
@@ -130,8 +155,11 @@ double Noise(double deltaT)
 	//double outout = 1.0 * (sin(ConvertF(m_Frequency) * deltaT));
 
 	//Calling oscillator
-	double outout = oscillator(m_Frequency, deltaT, 5);
+	//double outout = oscillator(m_Frequency, deltaT, 5);
 		
+	//Envelope call
+	//Instead of hard coding using envelope to get the right time
+	double outout = m_Envelope->GetAmplitude(deltaT) * oscillator(m_Frequency, deltaT, 3);
 
 	return outout * 0.4; // master volume
 
@@ -153,6 +181,7 @@ double Noise(double deltaT)
 
 int main()
 {
+	m_Envelope = new EnvelopeADSR;
 	//Get all sound hardware
 	vector<wstring> devices = olcNoiseMaker<short>::Enumerate();
 
@@ -172,6 +201,9 @@ int main()
 	sound.SetUserFunction(Noise);
 
 
+	int currentKey = -1;
+	bool keyPressed = false;
+	
 	while (1)
 	{
 
@@ -182,14 +214,24 @@ int main()
 			//Making the keyboard like a piano White and black keys
 			if (GetAsyncKeyState((unsigned char)("ZSXCFVGBNJMK\xbcL\xbc"[i])) & 0x8000)
 			{
-				m_Frequency = octaveFrequency * pow(twThRootOf2, i);
+				if (currentKey != i)
+				{
+					m_Frequency = octaveFrequency * pow(twThRootOf2, i);
+					m_Envelope->NotePressed(sound.GetTime());
+					currentKey = i;
+				}
 				keyPressed = true;
 			}
 		}
 
 		if (!keyPressed)
 		{
-			m_Frequency = 0.0;
+			if (currentKey != -1)
+			{
+				m_Envelope->NoteReleased(sound.GetTime());
+
+				currentKey = -1;
+			}
 		}
 
 		//One key
